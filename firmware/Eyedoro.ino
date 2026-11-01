@@ -1,125 +1,205 @@
-// Eyedoro - robot eyes Pomodoro timer
-// Board: Seeed XIAO RP2040, two 8x8 MAX7219 LED matrix modules (the eyes)
-//
-// Based on the RobotEyes example from the MD_MAX72XX library by MajicDesigns:
-// https://github.com/MajicDesigns/MD_MAX72XX
-//
-// Work time: the eyes glance around. Break time: the eyes sleep.
 
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 #include "MD_RobotEyes.h"
 
-// ----- Pins and hardware -----
-#define HARDWARE_TYPE MD_MAX72XX::PAROLA_HW   // confirm when the board is built
-#define MAX_DEVICES 2                          // two eyes
+// 1. Hardware settings
+#define HARDWARE_TYPE MD_MAX72XX::PAROLA_HW
+#define MAX_DEVICES 2
 #define CS_PIN D7
 #define BUTTON_PIN D3
 #define BUZZER_PIN D1
 
-// ----- Timer settings -----
-bool testMode = false;     // true = short times for testing, false = real times
-unsigned long workTime;
-unsigned long breakTime;
+// Change to true for 10-second testing
+const bool testMode = false;
 
-MD_MAX72XX M = MD_MAX72XX(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+const unsigned long WORK_TIME =
+  testMode ? 10000UL : 25UL * 60UL * 1000UL;
+
+const unsigned long BREAK_TIME =
+  testMode ? 5000UL : 5UL * 60UL * 1000UL;
+
+MD_MAX72XX M(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
 MD_RobotEyes E;
 
-// ----- Things the program remembers -----
-int state = 0;                  // 0 = ready, 1 = work, 2 = break
-unsigned long startTime = 0;    // when the work or break started
-unsigned long nextLook = 0;     // when the eyes glance next
-int sessions = 0;               // finished work sessions
-int lastButton = HIGH;
-unsigned long lastPress = 0;
+// 2. Pomodoro timer
+enum TimerState { READY, WORK, BREAK };
 
-// ----- Small jobs -----
-void startWork() {
-  state = 1;
-  startTime = millis();
-  nextLook = millis() + random(3000, 8000);
-}
+TimerState state = READY;
+bool paused = false;
 
-void startBreak() {
-  state = 2;
-  startTime = millis();
-  E.setAutoBlink(false);                               // stop random blinking
-  E.setAnimation(MD_RobotEyes::E_BLINK, false);        // eyes close and stay closed
-}
+unsigned long timeRemaining = WORK_TIME;
+unsigned long lastTick = 0;
+unsigned long nextLook = 0;
+unsigned int sessions = 0;
 
-void goReady() {
-  if (state == 2) {
-    E.setAnimation(MD_RobotEyes::E_BLINK, false, true); // eyes open again
-  }
-  state = 0;
+// 3. Button debounce
+const unsigned long DEBOUNCE_MS = 40;
+
+int rawButtonLast = HIGH;
+int stableButton = HIGH;
+unsigned long buttonChangedAt = 0;
+
+// 4. Start 25-minute work session
+void startWork(unsigned long now) {
+  state = WORK;
+  paused = false;
+  timeRemaining = WORK_TIME;
+  lastTick = now;
+
+  nextLook = now + random(3000, 8000);
+
   E.setAutoBlink(true);
+  E.setAnimation(MD_RobotEyes::E_NEUTRAL, false);
+
+  Serial.println("WORK STARTED");
 }
 
-void lookAround() {
-  int pick = random(0, 5);   // a number from 0 to 4
-  if (pick == 0) E.setAnimation(MD_RobotEyes::E_LOOK_L, true);
-  if (pick == 1) E.setAnimation(MD_RobotEyes::E_LOOK_R, true);
-  if (pick == 2) E.setAnimation(MD_RobotEyes::E_LOOK_U, true);
-  if (pick == 3) E.setAnimation(MD_RobotEyes::E_LOOK_D, true);
-  if (pick == 4) E.setAnimation(MD_RobotEyes::E_SCAN_LR, true);
-  nextLook = millis() + random(3000, 8000);
+// 5. Work complete: high beep and sleeping eyes
+void startBreak(unsigned long now) {
+  state = BREAK;
+  paused = false;
+  timeRemaining = BREAK_TIME;
+  lastTick = now;
+
+  E.setAutoBlink(false);
+  E.setAnimation(MD_RobotEyes::E_BLINK, false);
+
+  tone(BUZZER_PIN, 880, 140);
+  delay(190);
+
+  tone(BUZZER_PIN, 1320, 240);
+  delay(270);
+  noTone(BUZZER_PIN);
+
+  lastTick = millis();
+
+  Serial.println("WORK DONE - BREAK STARTED");
 }
 
-// ----- Runs once at the start -----
+// 6. Break complete: low beep and wake up
+void finishBreak() {
+  tone(BUZZER_PIN, 440, 400);
+  delay(420);
+  noTone(BUZZER_PIN);
+
+  state = READY;
+  paused = false;
+  timeRemaining = WORK_TIME;
+
+  E.setAnimation(MD_RobotEyes::E_BLINK, false, true);
+  E.setAutoBlink(true);
+
+  Serial.println("BREAK DONE - READY");
+}
+
+// 7. Random robot eye movement
+void lookAround(unsigned long now) {
+  switch (random(0, 5)) {
+    case 0:
+      E.setAnimation(MD_RobotEyes::E_LOOK_L, true);
+      break;
+    case 1:
+      E.setAnimation(MD_RobotEyes::E_LOOK_R, true);
+      break;
+    case 2:
+      E.setAnimation(MD_RobotEyes::E_LOOK_U, true);
+      break;
+    case 3:
+      E.setAnimation(MD_RobotEyes::E_LOOK_D, true);
+      break;
+    default:
+      E.setAnimation(MD_RobotEyes::E_SCAN_LR, true);
+      break;
+  }
+
+  nextLook = now + random(3000, 8000);
+}
+
+// 8. Button: Start / Pause / Resume
+void handleButton(unsigned long now) {
+  int raw = digitalRead(BUTTON_PIN);
+
+  if (raw != rawButtonLast) {
+    buttonChangedAt = now;
+  }
+
+  if (now - buttonChangedAt >= DEBOUNCE_MS &&
+      raw != stableButton) {
+
+    stableButton = raw;
+
+    if (stableButton == LOW) {
+      if (state == READY) {
+        startWork(now);
+      }
+      else {
+        paused = !paused;
+        lastTick = now;
+
+        Serial.println(paused ? "PAUSED" : "RESUMED");
+      }
+    }
+  }
+
+  rawButtonLast = raw;
+}
+
+// 9. Countdown logic
+void updateTimer(unsigned long now) {
+  if (state == READY || paused) return;
+
+  unsigned long elapsed = now - lastTick;
+  lastTick = now;
+
+  if (elapsed >= timeRemaining) {
+    timeRemaining = 0;
+
+    if (state == WORK) {
+      sessions++;
+      startBreak(now);
+    }
+    else {
+      finishBreak();
+    }
+  }
+  else {
+    timeRemaining -= elapsed;
+  }
+}
+
+// 10. Arduino setup
 void setup() {
+  Serial.begin(115200);
+
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
+
   randomSeed(analogRead(A0));
 
   M.begin();
   E.begin(&M);
-  M.control(MD_MAX72XX::INTENSITY, 2);   // low brightness for USB power
-  E.setAutoBlink(true);
 
-  if (testMode) {
-    workTime = 10000;     // 10 seconds
-    breakTime = 5000;     // 5 seconds
-  } else {
-    workTime = 25UL * 60UL * 1000UL;   // 25 minutes
-    breakTime = 5UL * 60UL * 1000UL;   // 5 minutes
-  }
+  M.control(MD_MAX72XX::INTENSITY, 2);
+
+  E.setAutoBlink(true);
+  E.setAnimation(MD_RobotEyes::E_NEUTRAL, false);
+
+  Serial.println("EYEDORO READY");
+  Serial.println("PRESS BUTTON TO START");
 }
 
-// ----- Runs again and again -----
+// 11. Arduino main loop
 void loop() {
-  E.runAnimation();   // keeps the eyes moving
+  unsigned long now = millis();
 
-  // Button: LOW means pressed. 200 ms wait so one press counts once.
-  int button = digitalRead(BUTTON_PIN);
-  if (button == LOW && lastButton == HIGH && millis() - lastPress > 200) {
-    lastPress = millis();
-    if (state == 0) {
-      startWork();
-    } else {
-      goReady();     // cancel
-    }
-  }
-  lastButton = button;
+  E.runAnimation();
+  handleButton(now);
+  updateTimer(now);
 
-  // While working: glance around now and then
-  if (state == 1 && millis() > nextLook) {
-    lookAround();
-  }
-
-  // Work time is over
-  if (state == 1 && millis() - startTime >= workTime) {
-    sessions = sessions + 1;
-    tone(BUZZER_PIN, 880, 150);
-    delay(200);
-    tone(BUZZER_PIN, 1320, 250);
-    delay(300);
-    startBreak();
-  }
-
-  // Break time is over
-  if (state == 2 && millis() - startTime >= breakTime) {
-    tone(BUZZER_PIN, 440, 400);
-    delay(450);
-    goReady();
+  if (state == WORK &&
+      !paused &&
+      (long)(now - nextLook) >= 0) {
+    lookAround(now);
   }
 }
