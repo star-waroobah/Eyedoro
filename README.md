@@ -1,7 +1,7 @@
 ## EyeDoro!
 
 [![View PCB on KiCanvas](https://hack.club/pcb-badge)](https://kicanvas.org/?repo=https://github.com/<OWNER>/<REPOSITORY>/tree/main/pcb)
-![3D view of the Eyedoro board](assets/3d-view.png)
+![3D view of the Eyedoro board](assets/3d front.png)
 
 Eyedoro is a desk buddy with two robot eyes that works as a Pomodoro study timer.
 Press the button to start a 25 minute work session. While you work, the eyes look
