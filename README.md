@@ -28,6 +28,10 @@ MAX7219 needs. A button starts and pauses the timer and a passive buzzer plays t
 ## Schematic
 ![Schematic](assets/schematic.png)
 
+## 3D view
+![3d front](assets/3d%20front.png)
+![3d back](assets/3d%20back.png)
+
 ## Bill of materials
 - 1x Seeed XIAO RP2040
 - 2x single 8x8 MAX7219 module
