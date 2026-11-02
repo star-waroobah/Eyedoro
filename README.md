@@ -46,7 +46,7 @@ A Seeed XIAO RP2040 drives two 8x8 MAX7219 LED matrix modules (the eyes) over SP
 - 1x 100 nF capacitor (0805)
 - 1x push button (6 mm)
 - 1x passive buzzer
-- 1x 5-pin female header (J1)
+- 1x 5-pin male header (J1)
 
 ## Firmware
 
